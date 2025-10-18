@@ -1,5 +1,5 @@
 import discord
-from discord.ext import commands
+from discord.ext import tasks
 import logging
 from dotenv import load_dotenv
 import os
@@ -9,6 +9,98 @@ import re
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import Dict, Any, List, Tuple
+
+USER_AGENT = "ShortBot (https://github.com/ZBL-pl/ShortBot)"
+
+def format_time_from_html(time_str: str):
+    try:
+        if "\'" in time_str:
+            minutes, rest = time_str.split("\'")
+            seconds, millis = rest.split("\"")
+        else:
+            minutes = 0
+            seconds, millis = time_str.split("\"")
+
+        time_formatted = f"{minutes}:{seconds}.{millis}"
+        return time_formatted
+    except ValueError:
+        raise ValueError("Invalid time format. Use M:SS.mmm or SS.mmm")
+    
+def fetch_page(url: str, timeout: int = 10):
+    headers = {"User-Agent": USER_AGENT}
+    resp = requests.get(url, headers=headers, timeout=timeout)
+    resp.raise_for_status
+    return resp.text
+
+def parse_wrs_from_html(html: str):
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.select_one("table.wr")
+    if not table:
+        raise ValueError("Could not find table.wr in html")
+    
+    worl_recs = {}
+    for tr in table.find_all("tr")[1:]:
+        tds = tr.find_all("td")
+        if len(tds) < 2:
+            continue
+
+        track = tds[0].get_text(strip=True)
+        time = format_time_from_html(tds[1].get_text(strip=True))
+
+        worl_recs[track] = time
+    
+    worl_recs.popitem()
+    return worl_recs
+
+TRACKS_LIST = {
+    "Mario Bros. Circuit":"MBC",
+    "Crown City":"CC",
+    "Whistlestop Summit":"WS",
+    "DK Spaceport":"DKS",
+    "Desert Hills":"rDH",
+    "Shy Guy Bazaar":"rSGB",
+    "Wario Stadium":"rWS",
+    "Airship Fortress":"rAF",
+    "DK Pass":"rDKP",
+    "Starview Peak":"SP",
+    "Sky-High Sundae":"rSHS",
+    "Wario Shipyard":"rWSh",
+    "Koopa Troopa Beach":"rKTB",
+    "Faraway Oasis":"FO",
+    "Peach Stadium":"PS",
+    "Peach Beach":"rPB",
+    "Salty Salty Speedway":"SSS",
+    "Dino Dino Jungle":"rDDJ",
+    "Great ? Block Ruins":"GBR",
+    "Cheep Cheep Falls":"CCF",
+    "Dandelion Depths":"DD",
+    "Boo Cinema":"BCi",
+    "Dry Bones Burnout":"DBB",
+    "Moo Moo Meadows":"rMMM",
+    "Choco Mountain":"rCM",
+    "Toad's Factory":"rTF",
+    "Bowser's Castle":"BC",
+    "Acorn Heights":"AH",
+    "Mario Circuit":"rMC",
+    "Rainbow Road":"RR"
+}
+
+def save_wr_list(wr_list):
+    with open("wrs.json", "w") as f:
+        json.dump(wr_list, f, indent=4)
+
+def load_wr_list():
+    if not os.path.exists("wrs.json"):
+        print("wrs.json Not found")
+        return {}
+    with open("wrs.json", "r") as f:
+        wr_list = json.load(f)
+        formatted_list = {}
+        for i in wr_list:
+            formatted_list[TRACKS_LIST.get(i)] = wr_list.get(i)
+        return formatted_list
+
+
 
 load_dotenv()
 token = os.getenv('DISCORD_TOKEN')
@@ -21,72 +113,6 @@ intents.presences = True
 
 client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
-
-TRACKS_LIST = {
-    "Mario Bros. Circuit":"MBC",
-    "Crown City":"CC",
-    "Whistlestop Summit":"WS",
-    "DK Spaceport":"DKS",
-    "Desert Hills (DS)":"rDH",
-    "Shy Guy Bazaar (3DS)":"rSGB",
-    "Wario Stadium (N64)":"rWS",
-    "Airship Fortress (DS)":"rAF",
-    "DK Pass (DS)":"rDKP",
-    "Starview Peak":"SP",
-    "Sky High Sundae (Tour/NSW)":"rSHS",
-    "Wario Shipyard (3DS)":"rWSh",
-    "Koopa Troopa Beach (SNES)":"rKTB",
-    "Faraway Oasis":"FO",
-    "Peach Stadium":"PS",
-    "Peach Beach (GCN)":"rPB",
-    "Salty Salty Speedway":"SSS",
-    "Dino Dino Jungle (GCN)":"rDDJ",
-    "Great Question Block Ruins":"GBR",
-    "Cheep Cheep Falls":"CCF",
-    "Dandelion Depths":"DD",
-    "Boo Cinema":"BCi",
-    "Dry Bones Burnout":"DBB",
-    "Moo Moo Meadows (Wii)":"rMMM",
-    "Choco Mountain (N64)":"rCM",
-    "Toad's Factory (Wii)":"rTF",
-    "Bowser's Castle":"BC",
-    "Acorn Heights":"AH",
-    "Mario Circuit (SNES)":"rMC",
-    "Rainbow Road":"RR"
-}
-
-wrs = {
-    "MBC": "1:48.446",
-    "CC": "2:04.448",
-    "WS": "1:44.686",
-    "DKS": "1:29.740",
-    "rDH": "1:32.336",
-    "rSGB": "1:51.242",
-    "rWS": "2:01.088",
-    "rAF": "1:54.513",
-    "rDKP": "2:00.044",
-    "SP": "2:12.255",
-    "rSHS": "1:52.985",
-    "rWSh": "2:16.968",
-    "rKTB": "1:27.650",
-    "FO": "1:56.974",
-    "PS": "2:15.419",
-    "rPB": "1:40.796",
-    "SSS": "1:56.471",
-    "rDDJ": "1:44.327",
-    "GBR": "2:02.490",
-    "CCF": "1:55.546",
-    "DD": "2:19.228",
-    "BCi": "2:04.664",
-    "DBB": "2:06.634",
-    "rMMM": "1:53.944",
-    "rCM": "2:01.742",
-    "rTF": "1:51.336",
-    "BC": "2:11.302",
-    "AH": "1:57.957",
-    "rMC": "1:03.766",
-    "RR": "3:55.127"
-}
 
 thumbnail_tracks = {
     "MBC": "https://mario.wiki.gallery/images/c/ca/MKWorld_Icon_Mario_Bros_Circuit.png",
@@ -246,20 +272,30 @@ async def track_autocomplete(interaction: discord.Interaction, current: str):
         for t in matches[:25]
     ]
 
+wrs = {}
+
+@tasks.loop(hours=1)
+async def update_world_records_list():
+    save_wr_list(parse_wrs_from_html(fetch_page("https://mkwrs.com/mkworld/wrs.php")))
+    print("World records list has been succesfully updated!")
+
 @client.event
 async def on_ready():
     await tree.sync()
     print(f"logged as {client.user}")
+    update_world_records_list.start()
 
-@tree.command(name="hello_slash", description="Slash command for hello")
+@tree.command(name="hello_slash", description="Slash command for hello (left from dev phase)")
 async def hello(interaction: discord.Interaction):
     user = interaction.user
     await interaction.response.send_message(f"Hello {user.mention}!")
 
 @tree.command(name="wr", description="Display wr for a track")
-@discord.app_commands.describe(track="The abreviation of a track")
+@discord.app_commands.describe(track="The name of a track")
 @discord.app_commands.autocomplete(track=track_autocomplete)
 async def wr(interaction: discord.Interaction, track: str = None):
+
+    wrs = load_wr_list()
     
     if track:
         embed_output = discord.Embed(
@@ -273,12 +309,15 @@ async def wr(interaction: discord.Interaction, track: str = None):
         
         track_list = "__Mushroom Cup__\n"
         cup_counter = 0
+        total_time = 0
         for i in wrs:
             track_list += f"**{i}** - `{wrs.get(i)}`\n"
+            total_time += parse_time(wrs.get(i))
             if i in ["DKS", "rAF", "rWSh", "PS", "GBR", "DBB", "BC"]:
                 track_list += f"__{cups[cup_counter]}__\n"
                 cup_counter += 1
 
+        track_list += f"\nTotal Time: `{format_time(total_time)}`"
         embed_output = discord.Embed(
             title=f"World Record Times",
             description=track_list,
@@ -286,10 +325,10 @@ async def wr(interaction: discord.Interaction, track: str = None):
         )
         await interaction.response.send_message(embed=embed_output)
 
-@tree.command(name="save", description="Save your time for a track")
-@discord.app_commands.describe(track="The abreviation of a track", time="Your time (e.g. 1:23.456)")
+@tree.command(name="timesave", description="Save your time for a track")
+@discord.app_commands.describe(track="The name of a track", time="Your time (e.g. 1:23.456)")
 @discord.app_commands.autocomplete(track=track_autocomplete)
-async def save(interaction: discord.Interaction, track: str, time: str):
+async def timesave(interaction: discord.Interaction, track: str, time: str):
     user_id = str(interaction.user.id)
     data = load_data()
     time = parse_time(time)
@@ -309,11 +348,13 @@ async def save(interaction: discord.Interaction, track: str, time: str):
     await interaction.response.send_message(embed=embed_output)
 
 @tree.command(name="score", description="Show your score for a track or in general")
-@discord.app_commands.describe(track="The abreviation of a track")
+@discord.app_commands.describe(track="The name of a track")
 @discord.app_commands.autocomplete(track=track_autocomplete)
 async def score(interaction: discord.Interaction, track: str = None):
     user_id = str(interaction.user.id)
     data = load_data()
+    wrs = load_wr_list()
+
     if track:
         if user_id in data and TRACKS_LIST.get(track) in data[user_id]:
             time = data[user_id][TRACKS_LIST.get(track)]
@@ -337,6 +378,7 @@ async def score(interaction: discord.Interaction, track: str = None):
         counter = 0
         total_time = 0
         cup_counter = 0
+        total_wr_time = 0
         if user_id in data:
             for i in wrs:
                 if i in ["rDH", "rDKP", "rKTB", "rPB", "CCF", "rMMM", "AH"]: #To trzeba zmienić, będzie słabo działać gdy uzyt. nie będzie mieć wszędzie czasów zapisanych
@@ -350,9 +392,10 @@ async def score(interaction: discord.Interaction, track: str = None):
                     counter += 1
                     total_score += track_score
                     total_time += time
+                    total_wr_time += parse_time(wrs.get(i))
                     
             if counter == 30:
-                output += f"\n**Total Time**: `{format_time(total_time)}`\n**Overall Score**: `{round(total_score/counter, 3)}`, __**{get_rank_ovr(total_score/counter)}**__"
+                output += f"\n**Total Time**: `{format_time(total_time)}`\n+`{format_time(total_time-total_wr_time)}`\n**Overall Score**: `{round(total_score/counter, 3)}`, __**{get_rank_ovr(total_score/counter)}**__"
 
             embed_output = discord.Embed(
                     title=f"{interaction.user.display_name} Score",
