@@ -45,9 +45,11 @@ def parse_wrs_from_html(html: str):
             continue
 
         track = tds[0].get_text(strip=True)
-        time = format_time_from_html(tds[1].get_text(strip=True))
-
-        worl_recs[track] = time
+        try: 
+            time = format_time_from_html(tds[1].get_text(strip=True))
+            worl_recs[track] = time
+        except:
+            pass
     
     worl_recs.popitem()
     return worl_recs
